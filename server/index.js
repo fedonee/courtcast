@@ -34,7 +34,9 @@ let setupConfig = {
   away_team: 'Lakers',
   stream_key: '',
   stream_visibility: 'unlisted',
-  crop: null // { x, y, width, height } as % of frame
+  crop_home: null,
+  crop_clock: null,
+  crop_away: null
 };
 
 if (fs.existsSync(setupPath)) {

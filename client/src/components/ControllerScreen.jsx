@@ -116,7 +116,7 @@ export default function ControllerScreen({ socket }) {
       </div>
 
       {/* Broadcast Controls */}
-      <div className="glass-panel" style={{ marginBottom: '24px', textAlign: 'center' }} className={`glass-panel ${isStreaming ? 'glass-panel-glow' : ''}`}>
+      <div style={{ marginBottom: '24px', textAlign: 'center' }} className={`glass-panel ${isStreaming ? 'glass-panel-glow' : ''}`}>
         <div className="card-header" style={{ justifyContent: 'center', gap: '10px' }}>
           {isStreaming ? (
             <div className="live-indicator">

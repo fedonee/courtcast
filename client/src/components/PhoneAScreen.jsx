@@ -160,7 +160,9 @@ function preprocessCanvas(canvas) {
 }
 
 export default function PhoneAScreen({ socket }) {
-  const [crop, setCrop] = useState(null);
+  const [cropHome, setCropHome] = useState(null);
+  const [cropClock, setCropClock] = useState(null);
+  const [cropAway, setCropAway] = useState(null);
   const [score, setScore] = useState({
     home_score: 0,
     away_score: 0,
@@ -179,6 +181,9 @@ export default function PhoneAScreen({ socket }) {
 
   const videoRef = useRef(null);
   const canvasRef = useRef(null);
+  const canvasHomeRef = useRef(null);
+  const canvasClockRef = useRef(null);
+  const canvasAwayRef = useRef(null);
   const streamRef = useRef(null);
   const intervalRef = useRef(null);
   const isProcessingRef = useRef(false);
@@ -192,14 +197,18 @@ export default function PhoneAScreen({ socket }) {
     socket.on('INITIAL_STATE', (state) => {
       if (state.setup) {
         setSetup(state.setup);
-        setCrop(state.setup.crop || null);
+        setCropHome(state.setup.crop_home || null);
+        setCropClock(state.setup.crop_clock || null);
+        setCropAway(state.setup.crop_away || null);
       }
       if (state.score) setScore(state.score);
     });
 
     socket.on('SETUP_UPDATE', (newSetup) => {
       setSetup(newSetup);
-      setCrop(newSetup.crop || null);
+      setCropHome(newSetup.crop_home || null);
+      setCropClock(newSetup.crop_clock || null);
+      setCropAway(newSetup.crop_away || null);
     });
 
     socket.on('SCORE_UPDATE', (newScore) => {
@@ -258,73 +267,128 @@ export default function PhoneAScreen({ socket }) {
         clearInterval(intervalRef.current);
       }
     };
-  }, [crop, isPlaying]); // Restart interval whenever the crop bounds or playing status changes
+  }, [cropHome, cropClock, cropAway, isPlaying]); // Restart interval whenever the crop bounds or playing status changes
 
   const processFrame = async () => {
     const video = videoRef.current;
-    const canvas = canvasRef.current;
     
-    if (video && video.readyState === video.HAVE_ENOUGH_DATA && canvas && isPlaying) {
+    if (video && video.readyState === video.HAVE_ENOUGH_DATA && isPlaying) {
       if (isProcessingRef.current) return;
       isProcessingRef.current = true;
 
       const vw = video.videoWidth;
       const vh = video.videoHeight;
+      const hasCrops = (cropHome && cropHome.width > 0) || (cropClock && cropClock.width > 0) || (cropAway && cropAway.width > 0);
 
-      if (crop && crop.width > 0 && crop.height > 0) {
-        // Calculate crop bounds in pixels
-        const cx = (crop.x / 100) * vw;
-        const cy = (crop.y / 100) * vh;
-        const cw = (crop.width / 100) * vw;
-        const ch = (crop.height / 100) * vh;
-
-        canvas.width = cw;
-        canvas.height = ch;
-        const ctx = canvas.getContext('2d');
-        // Crop and draw
-        ctx.drawImage(video, cx, cy, cw, ch, 0, 0, cw, ch);
-
-        // Preprocess image to invert colors and binarize for 100% accurate OCR
-        preprocessCanvas(canvas);
-
+      if (hasCrops) {
         setOcrStatus('Reading locally...');
-        try {
-          // Perform OCR locally in the browser
-          const { data: { text } } = await Tesseract.recognize(canvas, 'eng', {
-            parameters: {
-              tessedit_char_whitelist: '0123456789:',
-              tessedit_pageseg_mode: '11' // Sparse text
-            }
-          });
-          
-          console.log('[OCR] Raw text:', text);
-          const parsed = parseScoreboardText(text);
-          console.log('[OCR] Parsed values:', parsed);
+        const parsed = {};
 
+        try {
+          // 1. Process Home Score
+          if (cropHome && cropHome.width > 0 && cropHome.height > 0 && canvasHomeRef.current) {
+            const canvas = canvasHomeRef.current;
+            const cx = (cropHome.x / 100) * vw;
+            const cy = (cropHome.y / 100) * vh;
+            const cw = (cropHome.width / 100) * vw;
+            const ch = (cropHome.height / 100) * vh;
+            canvas.width = cw;
+            canvas.height = ch;
+            const ctx = canvas.getContext('2d');
+            ctx.drawImage(video, cx, cy, cw, ch, 0, 0, cw, ch);
+            preprocessCanvas(canvas);
+            
+            const { data: { text } } = await Tesseract.recognize(canvas, 'eng', {
+              parameters: {
+                tessedit_char_whitelist: '0123456789',
+                tessedit_pageseg_mode: '7' // Single line
+              }
+            });
+            const cleanText = text.replace(/[^0-9]/g, '').trim();
+            const val = parseInt(cleanText, 10);
+            if (!isNaN(val)) parsed.home_score = val;
+          }
+
+          // 2. Process Clock
+          if (cropClock && cropClock.width > 0 && cropClock.height > 0 && canvasClockRef.current) {
+            const canvas = canvasClockRef.current;
+            const cx = (cropClock.x / 100) * vw;
+            const cy = (cropClock.y / 100) * vh;
+            const cw = (cropClock.width / 100) * vw;
+            const ch = (cropClock.height / 100) * vh;
+            canvas.width = cw;
+            canvas.height = ch;
+            const ctx = canvas.getContext('2d');
+            ctx.drawImage(video, cx, cy, cw, ch, 0, 0, cw, ch);
+            preprocessCanvas(canvas);
+            
+            const { data: { text } } = await Tesseract.recognize(canvas, 'eng', {
+              parameters: {
+                tessedit_char_whitelist: '0123456789:',
+                tessedit_pageseg_mode: '7' // Single line
+              }
+            });
+            const cleanText = text.replace(/[^0-9:]/g, '').trim();
+            if (/^\d{1,2}:\d{2}$/.test(cleanText)) {
+              parsed.clock = cleanText;
+            } else if (/^\d{3,4}$/.test(cleanText)) {
+              const mid = cleanText.length - 2;
+              parsed.clock = cleanText.slice(0, mid) + ':' + cleanText.slice(mid);
+            }
+          }
+
+          // 3. Process Away Score
+          if (cropAway && cropAway.width > 0 && cropAway.height > 0 && canvasAwayRef.current) {
+            const canvas = canvasAwayRef.current;
+            const cx = (cropAway.x / 100) * vw;
+            const cy = (cropAway.y / 100) * vh;
+            const cw = (cropAway.width / 100) * vw;
+            const ch = (cropAway.height / 100) * vh;
+            canvas.width = cw;
+            canvas.height = ch;
+            const ctx = canvas.getContext('2d');
+            ctx.drawImage(video, cx, cy, cw, ch, 0, 0, cw, ch);
+            preprocessCanvas(canvas);
+            
+            const { data: { text } } = await Tesseract.recognize(canvas, 'eng', {
+              parameters: {
+                tessedit_char_whitelist: '0123456789',
+                tessedit_pageseg_mode: '7' // Single line
+              }
+            });
+            const cleanText = text.replace(/[^0-9]/g, '').trim();
+            const val = parseInt(cleanText, 10);
+            if (!isNaN(val)) parsed.away_score = val;
+          }
+
+          console.log('[OCR] Multi-Zone OCR Result:', parsed);
           if (Object.keys(parsed).length > 0) {
             socket.emit('SCORE_UPDATE_REQUEST', parsed);
             setOcrStatus('Read Successful');
           } else {
-            setOcrStatus('Read Empty/No digits');
+            setOcrStatus('Read Empty');
           }
         } catch (err) {
-          console.error('[OCR] Local recognition failed:', err);
+          console.error('[OCR] Multi-Zone OCR Error:', err);
           setOcrStatus('OCR Error');
         } finally {
           isProcessingRef.current = false;
         }
       } else {
         // No crop config yet. Capture and downscale to send to setup screen via socket maintaining correct aspect ratio
-        const targetWidth = 640;
-        const targetHeight = Math.round((vh / vw) * targetWidth);
-        canvas.width = targetWidth;
-        canvas.height = targetHeight;
-        const ctx = canvas.getContext('2d');
-        ctx.drawImage(video, 0, 0, vw, vh, 0, 0, targetWidth, targetHeight);
-        
-        const base64Frame = canvas.toDataURL('image/jpeg', 0.65);
-        socket.emit('PHONE_A_PREVIEW', base64Frame);
-        setOcrStatus('Streaming preview...');
+        if (canvasRef.current) {
+          const canvas = canvasRef.current;
+          const targetWidth = 640;
+          const targetHeight = Math.round((vh / vw) * targetWidth);
+          canvas.width = targetWidth;
+          canvas.height = targetHeight;
+          const ctx = canvas.getContext('2d');
+          ctx.drawImage(video, 0, 0, vw, vh, 0, 0, targetWidth, targetHeight);
+          
+          const base64Frame = canvas.toDataURL('image/jpeg', 0.65);
+          socket.emit('PHONE_A_PREVIEW', base64Frame);
+          setOcrStatus('Streaming preview...');
+        }
         isProcessingRef.current = false;
       }
     }
@@ -379,16 +443,41 @@ export default function PhoneAScreen({ socket }) {
           )}
 
           {/* Display overlay indicating crop coordinates if they exist */}
-          {crop && isPlaying && (
+          {cropHome && isPlaying && (
             <div 
               style={{
                 position: 'absolute',
-                border: '2px solid var(--accent-color)',
-                boxShadow: '0 0 0 9999px rgba(0,0,0,0.5)',
-                left: `${crop.x}%`,
-                top: `${crop.y}%`,
-                width: `${crop.width}%`,
-                height: `${crop.height}%`,
+                border: '2px solid #ef4444',
+                left: `${cropHome.x}%`,
+                top: `${cropHome.y}%`,
+                width: `${cropHome.width}%`,
+                height: `${cropHome.height}%`,
+                pointerEvents: 'none'
+              }}
+            />
+          )}
+          {cropClock && isPlaying && (
+            <div 
+              style={{
+                position: 'absolute',
+                border: '2px solid #eab308',
+                left: `${cropClock.x}%`,
+                top: `${cropClock.y}%`,
+                width: `${cropClock.width}%`,
+                height: `${cropClock.height}%`,
+                pointerEvents: 'none'
+              }}
+            />
+          )}
+          {cropAway && isPlaying && (
+            <div 
+              style={{
+                position: 'absolute',
+                border: '2px solid #3b82f6',
+                left: `${cropAway.x}%`,
+                top: `${cropAway.y}%`,
+                width: `${cropAway.width}%`,
+                height: `${cropAway.height}%`,
                 pointerEvents: 'none'
               }}
             />
@@ -405,20 +494,35 @@ export default function PhoneAScreen({ socket }) {
         </div>
 
         {/* OCR Debug Preview (Only shown when cropped and playing) */}
-        {crop && isPlaying && (
+        {((cropHome && cropHome.width > 0) || (cropClock && cropClock.width > 0) || (cropAway && cropAway.width > 0)) && isPlaying && (
           <div style={{ marginTop: '16px', borderTop: '1px solid var(--panel-border)', paddingTop: '16px', textAlign: 'center' }}>
-            <span style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', display: 'block', marginBottom: '8px' }}>
-              OCR Scanner Feed (Binarized Preview):
+            <span style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', display: 'block', marginBottom: '12px' }}>
+              OCR Scanner Feeds (Binarized Previews):
             </span>
-            <div style={{ display: 'inline-block', background: '#ffffff', padding: '6px', borderRadius: '6px', border: '1px solid var(--panel-border)', maxWidth: '100%' }}>
-              <canvas ref={canvasRef} style={{ display: 'block', maxWidth: '100%', maxHeight: '100px', objectFit: 'contain' }} />
+            <div style={{ display: 'flex', justifyContent: 'center', gap: '12px', flexWrap: 'wrap' }}>
+              {cropHome && (
+                <div style={{ background: '#ffffff', padding: '6px', borderRadius: '6px', border: '1px solid #ef4444', display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
+                  <span style={{ fontSize: '0.65rem', color: '#ef4444', fontWeight: 'bold', marginBottom: '4px' }}>HOME</span>
+                  <canvas ref={canvasHomeRef} style={{ display: 'block', height: '40px', objectFit: 'contain' }} />
+                </div>
+              )}
+              {cropClock && (
+                <div style={{ background: '#ffffff', padding: '6px', borderRadius: '6px', border: '1px solid #eab308', display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
+                  <span style={{ fontSize: '0.65rem', color: '#eab308', fontWeight: 'bold', marginBottom: '4px' }}>CLOCK</span>
+                  <canvas ref={canvasClockRef} style={{ display: 'block', height: '40px', objectFit: 'contain' }} />
+                </div>
+              )}
+              {cropAway && (
+                <div style={{ background: '#ffffff', padding: '6px', borderRadius: '6px', border: '1px solid #3b82f6', display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
+                  <span style={{ fontSize: '0.65rem', color: '#3b82f6', fontWeight: 'bold', marginBottom: '4px' }}>AWAY</span>
+                  <canvas ref={canvasAwayRef} style={{ display: 'block', height: '40px', objectFit: 'contain' }} />
+                </div>
+              )}
             </div>
           </div>
         )}
 
-        {!crop && (
-          <canvas ref={canvasRef} style={{ display: 'none' }} />
-        )}
+        <canvas ref={canvasRef} style={{ display: 'none' }} />
       </div>
 
       {/* OCR Result Monitor */}

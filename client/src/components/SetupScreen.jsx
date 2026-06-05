@@ -10,8 +10,11 @@ export default function SetupScreen({ socket }) {
   // Live camera preview from Phone A
   const [previewFrame, setPreviewFrame] = useState(null);
   
-  // Crop state in percentages (0-100)
-  const [crop, setCrop] = useState(null);
+  // Crop states in percentages (0-100)
+  const [cropHome, setCropHome] = useState(null);
+  const [cropClock, setCropClock] = useState(null);
+  const [cropAway, setCropAway] = useState(null);
+  const [activeCropTarget, setActiveCropTarget] = useState('home'); // 'home', 'clock', 'away'
   const [dragStart, setDragStart] = useState(null);
   const containerRef = useRef(null);
 
@@ -32,7 +35,9 @@ export default function SetupScreen({ socket }) {
           setAwayTeam(data.away_team || 'Lakers');
           setStreamKey(data.stream_key || '');
           setStreamVisibility(data.stream_visibility || 'unlisted');
-          setCrop(data.crop || null);
+          setCropHome(data.crop_home || null);
+          setCropClock(data.crop_clock || null);
+          setCropAway(data.crop_away || null);
         }
       })
       .catch(err => console.error('Error fetching setup config:', err));
@@ -58,7 +63,10 @@ export default function SetupScreen({ socket }) {
     const y = ((clientY - rect.top) / rect.height) * 100;
     
     setDragStart({ x, y });
-    setCrop({ x, y, width: 0, height: 0 });
+    const newCrop = { x, y, width: 0, height: 0 };
+    if (activeCropTarget === 'home') setCropHome(newCrop);
+    else if (activeCropTarget === 'clock') setCropClock(newCrop);
+    else if (activeCropTarget === 'away') setCropAway(newCrop);
   };
 
   const handleMove = (e) => {
@@ -75,7 +83,10 @@ export default function SetupScreen({ socket }) {
     const width = Math.max(0, Math.min(100 - x, Math.abs(currentX - dragStart.x)));
     const height = Math.max(0, Math.min(100 - y, Math.abs(currentY - dragStart.y)));
     
-    setCrop({ x, y, width, height });
+    const newCrop = { x, y, width, height };
+    if (activeCropTarget === 'home') setCropHome(newCrop);
+    else if (activeCropTarget === 'clock') setCropClock(newCrop);
+    else if (activeCropTarget === 'away') setCropAway(newCrop);
   };
 
   const handleEnd = () => {
@@ -92,7 +103,9 @@ export default function SetupScreen({ socket }) {
       away_team: awayTeam,
       stream_key: streamKey,
       stream_visibility: streamVisibility,
-      crop
+      crop_home: cropHome,
+      crop_clock: cropClock,
+      crop_away: cropAway
     };
 
     try {
@@ -117,7 +130,9 @@ export default function SetupScreen({ socket }) {
   };
 
   const handleResetCrop = () => {
-    setCrop(null);
+    if (activeCropTarget === 'home') setCropHome(null);
+    else if (activeCropTarget === 'clock') setCropClock(null);
+    else if (activeCropTarget === 'away') setCropAway(null);
   };
 
   return (
@@ -182,9 +197,65 @@ export default function SetupScreen({ socket }) {
             <label className="form-label">Scoreboard Crop Selection</label>
             <p style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', marginBottom: '10px' }}>
               {previewFrame 
-                ? "Drag a box over the scoreboard region from Phone A's live feed below." 
+                ? "Select a target below, then drag a box on the camera feed to crop it." 
                 : "Waiting for Phone A to connect to show camera preview..."}
             </p>
+
+            {previewFrame && (
+              <div style={{ display: 'flex', gap: '8px', marginBottom: '12px' }}>
+                <button 
+                  type="button" 
+                  className="btn"
+                  onClick={() => setActiveCropTarget('home')}
+                  style={{ 
+                    flex: 1, 
+                    fontSize: '0.8rem', 
+                    padding: '8px', 
+                    border: activeCropTarget === 'home' ? '2px solid #ef4444' : '1px solid var(--panel-border)',
+                    background: activeCropTarget === 'home' ? 'rgba(239, 68, 68, 0.2)' : 'transparent',
+                    color: activeCropTarget === 'home' ? '#ef4444' : 'var(--text-primary)',
+                    cursor: 'pointer',
+                    borderRadius: '6px'
+                  }}
+                >
+                  🔴 Home Score
+                </button>
+                <button 
+                  type="button" 
+                  className="btn"
+                  onClick={() => setActiveCropTarget('clock')}
+                  style={{ 
+                    flex: 1, 
+                    fontSize: '0.8rem', 
+                    padding: '8px', 
+                    border: activeCropTarget === 'clock' ? '2px solid #eab308' : '1px solid var(--panel-border)',
+                    background: activeCropTarget === 'clock' ? 'rgba(234, 179, 8, 0.2)' : 'transparent',
+                    color: activeCropTarget === 'clock' ? '#eab308' : 'var(--text-primary)',
+                    cursor: 'pointer',
+                    borderRadius: '6px'
+                  }}
+                >
+                  🟡 Game Clock
+                </button>
+                <button 
+                  type="button" 
+                  className="btn"
+                  onClick={() => setActiveCropTarget('away')}
+                  style={{ 
+                    flex: 1, 
+                    fontSize: '0.8rem', 
+                    padding: '8px', 
+                    border: activeCropTarget === 'away' ? '2px solid #3b82f6' : '1px solid var(--panel-border)',
+                    background: activeCropTarget === 'away' ? 'rgba(59, 130, 246, 0.2)' : 'transparent',
+                    color: activeCropTarget === 'away' ? '#3b82f6' : 'var(--text-primary)',
+                    cursor: 'pointer',
+                    borderRadius: '6px'
+                  }}
+                >
+                  🔵 Away Score
+                </button>
+              </div>
+            )}
 
             <div 
               className="crop-container"
@@ -209,33 +280,71 @@ export default function SetupScreen({ socket }) {
                 </div>
               )}
 
-              {crop && (
+              {cropHome && (
                 <div 
                   className="crop-overlay-rect"
                   style={{
-                    left: `${crop.x}%`,
-                    top: `${crop.y}%`,
-                    width: `${crop.width}%`,
-                    height: `${crop.height}%`
+                    left: `${cropHome.x}%`,
+                    top: `${cropHome.y}%`,
+                    width: `${cropHome.width}%`,
+                    height: `${cropHome.height}%`,
+                    borderColor: '#ef4444',
+                    background: 'rgba(239, 68, 68, 0.15)'
                   }}
-                />
+                >
+                  <span style={{ position: 'absolute', top: '-18px', left: '0', fontSize: '0.7rem', color: '#ef4444', fontWeight: 'bold' }}>HOME</span>
+                </div>
+              )}
+
+              {cropClock && (
+                <div 
+                  className="crop-overlay-rect"
+                  style={{
+                    left: `${cropClock.x}%`,
+                    top: `${cropClock.y}%`,
+                    width: `${cropClock.width}%`,
+                    height: `${cropClock.height}%`,
+                    borderColor: '#eab308',
+                    background: 'rgba(234, 179, 8, 0.15)'
+                  }}
+                >
+                  <span style={{ position: 'absolute', top: '-18px', left: '0', fontSize: '0.7rem', color: '#eab308', fontWeight: 'bold' }}>CLOCK</span>
+                </div>
+              )}
+
+              {cropAway && (
+                <div 
+                  className="crop-overlay-rect"
+                  style={{
+                    left: `${cropAway.x}%`,
+                    top: `${cropAway.y}%`,
+                    width: `${cropAway.width}%`,
+                    height: `${cropAway.height}%`,
+                    borderColor: '#3b82f6',
+                    background: 'rgba(59, 130, 246, 0.15)'
+                  }}
+                >
+                  <span style={{ position: 'absolute', top: '-18px', left: '0', fontSize: '0.7rem', color: '#3b82f6', fontWeight: 'bold' }}>AWAY</span>
+                </div>
               )}
 
               {previewFrame && (
                 <div className="crop-instruction">
-                  {crop ? `Selected: ${crop.width.toFixed(0)}x${crop.height.toFixed(0)}%` : "Drag to crop scoreboard"}
+                  Drag to crop selected target ({activeCropTarget.toUpperCase()})
                 </div>
               )}
             </div>
 
-            {crop && (
+            {((activeCropTarget === 'home' && cropHome) || 
+              (activeCropTarget === 'clock' && cropClock) || 
+              (activeCropTarget === 'away' && cropAway)) && (
               <button 
                 type="button" 
                 className="btn btn-secondary" 
                 onClick={handleResetCrop} 
                 style={{ marginTop: '10px', fontSize: '0.8rem', padding: '6px 12px' }}
               >
-                Reset Crop
+                Reset Crop {activeCropTarget.toUpperCase()}
               </button>
             )}
           </div>
