@@ -315,20 +315,10 @@ export default function PhoneAScreen({ socket }) {
             
             const base64Data = canvas.toDataURL('image/jpeg', 0.8).split(',')[1];
             try {
-              const apiKey = setup.gemini_api_key;
-              const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${apiKey}`, {
+              const response = await fetch('/api/ocr-gemini', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                  contents: [
-                    {
-                      parts: [
-                        { text: "Read this basketball scoreboard image. Identify the home team score, away team score, and the remaining game clock. Return ONLY a raw JSON object matching this schema, without any markdown blocks or formatting: {\"home_score\": integer or null, \"away_score\": integer or null, \"clock\": \"MM:SS\" or null}. If any field is illegible or not present, return null for that field." },
-                        { inlineData: { mimeType: "image/jpeg", data: base64Data } }
-                      ]
-                    }
-                  ]
-                })
+                body: JSON.stringify({ image: base64Data })
               });
 
               if (!response.ok) {
@@ -336,10 +326,8 @@ export default function PhoneAScreen({ socket }) {
               }
 
               const resJson = await response.json();
-              const textResponse = resJson.candidates?.[0]?.content?.parts?.[0]?.text;
-              if (textResponse) {
-                const cleanJsonText = textResponse.replace(/```json/g, '').replace(/```/g, '').trim();
-                const parsed = JSON.parse(cleanJsonText);
+              if (resJson.success && resJson.result) {
+                const parsed = resJson.result;
                 
                 const update = {};
                 if (parsed.home_score !== null && !isNaN(parsed.home_score)) update.home_score = Number(parsed.home_score);
