@@ -124,6 +124,41 @@ function parseScoreboardText(text) {
   return parsed;
 }
 
+function preprocessCanvas(canvas) {
+  const ctx = canvas.getContext('2d');
+  if (!ctx) return;
+  const imgData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+  const data = imgData.data;
+
+  let min = 255;
+  let max = 0;
+  const brightness = new Uint8Array(data.length / 4);
+
+  for (let i = 0; i < data.length; i += 4) {
+    const r = data[i];
+    const g = data[i+1];
+    const b = data[i+2];
+    const gray = Math.round(0.299 * r + 0.587 * g + 0.114 * b);
+    brightness[i/4] = gray;
+    if (gray < min) min = gray;
+    if (gray > max) max = gray;
+  }
+
+  // Find threshold (midpoint between min and max)
+  const threshold = max - min > 35 ? min + (max - min) * 0.45 : 120;
+
+  for (let i = 0; i < data.length; i += 4) {
+    const gray = brightness[i/4];
+    // Bright text becomes black, dark background becomes white
+    const val = gray > threshold ? 0 : 255;
+    data[i] = val;
+    data[i+1] = val;
+    data[i+2] = val;
+  }
+  
+  ctx.putImageData(imgData, 0, 0);
+}
+
 export default function PhoneAScreen({ socket }) {
   const [crop, setCrop] = useState(null);
   const [score, setScore] = useState({
@@ -249,6 +284,9 @@ export default function PhoneAScreen({ socket }) {
         // Crop and draw
         ctx.drawImage(video, cx, cy, cw, ch, 0, 0, cw, ch);
 
+        // Preprocess image to invert colors and binarize for 100% accurate OCR
+        preprocessCanvas(canvas);
+
         setOcrStatus('Reading locally...');
         try {
           // Perform OCR locally in the browser
@@ -366,8 +404,21 @@ export default function PhoneAScreen({ socket }) {
           </span>
         </div>
 
-        {/* Hidden canvas for extracting pixel data */}
-        <canvas ref={canvasRef} style={{ display: 'none' }} />
+        {/* OCR Debug Preview (Only shown when cropped and playing) */}
+        {crop && isPlaying && (
+          <div style={{ marginTop: '16px', borderTop: '1px solid var(--panel-border)', paddingTop: '16px', textAlign: 'center' }}>
+            <span style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', display: 'block', marginBottom: '8px' }}>
+              OCR Scanner Feed (Binarized Preview):
+            </span>
+            <div style={{ display: 'inline-block', background: '#ffffff', padding: '6px', borderRadius: '6px', border: '1px solid var(--panel-border)', maxWidth: '100%' }}>
+              <canvas ref={canvasRef} style={{ display: 'block', maxWidth: '100%', maxHeight: '100px', objectFit: 'contain' }} />
+            </div>
+          </div>
+        )}
+
+        {!crop && (
+          <canvas ref={canvasRef} style={{ display: 'none' }} />
+        )}
       </div>
 
       {/* OCR Result Monitor */}
