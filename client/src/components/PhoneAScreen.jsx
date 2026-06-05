@@ -16,6 +16,7 @@ export default function PhoneAScreen({ socket }) {
   const [cameraStatus, setCameraStatus] = useState('Initializing camera...');
   const [ocrStatus, setOcrStatus] = useState('Standby');
   const [setup, setSetup] = useState({ home_team: 'HOME', away_team: 'AWAY' });
+  const [isPlaying, setIsPlaying] = useState(false);
 
   const videoRef = useRef(null);
   const canvasRef = useRef(null);
@@ -58,6 +59,9 @@ export default function PhoneAScreen({ socket }) {
       streamRef.current = stream;
       if (videoRef.current) {
         videoRef.current.srcObject = stream;
+        videoRef.current.play()
+          .then(() => setIsPlaying(true))
+          .catch((e) => console.log('Autoplay blocked, waiting for tap:', e));
       }
       setCameraStatus('Camera Active');
     })
@@ -94,7 +98,7 @@ export default function PhoneAScreen({ socket }) {
         clearInterval(intervalRef.current);
       }
     };
-  }, [crop]); // Restart interval whenever the crop bounds change
+  }, [crop, isPlaying]); // Restart interval whenever the crop bounds or playing status changes
 
   const postOCRFrame = async (jpegBlob) => {
     setOcrStatus('Reading...');
@@ -120,7 +124,7 @@ export default function PhoneAScreen({ socket }) {
     const video = videoRef.current;
     const canvas = canvasRef.current;
     
-    if (video && video.readyState === video.HAVE_ENOUGH_DATA && canvas) {
+    if (video && video.readyState === video.HAVE_ENOUGH_DATA && canvas && isPlaying) {
       const vw = video.videoWidth;
       const vh = video.videoHeight;
 
@@ -157,6 +161,14 @@ export default function PhoneAScreen({ socket }) {
     }
   };
 
+  const handlePlayVideo = () => {
+    if (videoRef.current) {
+      videoRef.current.play()
+        .then(() => setIsPlaying(true))
+        .catch(err => console.error('Play trigger failed:', err));
+    }
+  };
+
   return (
     <div className="container" style={{ paddingBottom: '40px' }}>
       <div className="header">
@@ -174,16 +186,31 @@ export default function PhoneAScreen({ socket }) {
           </span>
         </div>
 
-        <div style={{ position: 'relative', width: '100%', aspectRatio: '16/9', background: '#000000', borderRadius: '8px', overflow: 'hidden' }}>
+        <div 
+          onClick={handlePlayVideo}
+          style={{ position: 'relative', width: '100%', aspectRatio: '16/9', background: '#000000', borderRadius: '8px', overflow: 'hidden', cursor: 'pointer' }}
+        >
           <video 
             ref={videoRef} 
             autoPlay 
             playsInline 
             muted 
+            onPlay={() => setIsPlaying(true)}
+            onPause={() => setIsPlaying(false)}
             style={{ width: '100%', height: '100%', objectFit: 'cover' }}
           />
+
+          {!isPlaying && (
+            <div style={{ position: 'absolute', inset: 0, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', background: 'rgba(0,0,0,0.8)', color: '#ffffff', zIndex: 10 }}>
+              <span style={{ fontSize: '2.5rem', marginBottom: '12px' }}>📷</span>
+              <span style={{ fontFamily: 'var(--font-display)', fontWeight: 'bold', fontSize: '1rem', textTransform: 'uppercase', letterSpacing: '1px' }}>
+                Tap to Start Camera Feed
+              </span>
+            </div>
+          )}
+
           {/* Display overlay indicating crop coordinates if they exist */}
-          {crop && (
+          {crop && isPlaying && (
             <div 
               style={{
                 position: 'absolute',

@@ -4,6 +4,7 @@ export default function PhoneBScreen({ socket }) {
   const [cameraStatus, setCameraStatus] = useState('Initializing camera...');
   const [streamStatus, setStreamStatus] = useState('Standby');
   const [isRecording, setIsRecording] = useState(false);
+  const [isPlaying, setIsPlaying] = useState(false);
 
   const videoRef = useRef(null);
   const streamRef = useRef(null);
@@ -28,6 +29,9 @@ export default function PhoneBScreen({ socket }) {
       streamRef.current = stream;
       if (videoRef.current) {
         videoRef.current.srcObject = stream;
+        videoRef.current.play()
+          .then(() => setIsPlaying(true))
+          .catch((e) => console.log('Autoplay blocked, waiting for tap:', e));
       }
       setCameraStatus('Camera Active');
     })
@@ -46,6 +50,9 @@ export default function PhoneBScreen({ socket }) {
         streamRef.current = stream;
         if (videoRef.current) {
           videoRef.current.srcObject = stream;
+          videoRef.current.play()
+            .then(() => setIsPlaying(true))
+            .catch((e) => console.log('Autoplay blocked, waiting for tap:', e));
         }
         setCameraStatus('Camera Active (No Audio)');
       })
@@ -79,15 +86,15 @@ export default function PhoneBScreen({ socket }) {
         streamRef.current.getTracks().forEach(track => track.stop());
       }
     };
-  }, [socket]);
+  }, [socket, isPlaying]);
 
   const startRecording = () => {
     if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
       return; // Already recording
     }
 
-    if (!streamRef.current) {
-      console.error('[Phone B] No video stream available to record.');
+    if (!streamRef.current || !isPlaying) {
+      console.error('[Phone B] No playing video stream available to record.');
       setStreamStatus('Failed: No Camera Stream');
       return;
     }
@@ -147,6 +154,14 @@ export default function PhoneBScreen({ socket }) {
     }
   };
 
+  const handlePlayVideo = () => {
+    if (videoRef.current) {
+      videoRef.current.play()
+        .then(() => setIsPlaying(true))
+        .catch(err => console.error('Play trigger failed:', err));
+    }
+  };
+
   return (
     <div className="container">
       <div className="header">
@@ -154,7 +169,7 @@ export default function PhoneBScreen({ socket }) {
         <p style={{ color: 'var(--text-secondary)', marginTop: '8px' }}>Phone B — Game Broadcast Camera</p>
       </div>
 
-      <div className="glass-panel" className={`glass-panel ${isRecording ? 'glass-panel-glow' : ''}`}>
+      <div className={`glass-panel ${isRecording ? 'glass-panel-glow' : ''}`}>
         <div className="card-header">
           <h2 className="card-title">Live Game Capture</h2>
           <span className="live-indicator">
@@ -164,16 +179,30 @@ export default function PhoneBScreen({ socket }) {
         </div>
 
         {/* Video Preview */}
-        <div style={{ position: 'relative', width: '100%', aspectRatio: '16/9', background: '#000000', borderRadius: '8px', overflow: 'hidden', marginBottom: '16px' }}>
+        <div 
+          onClick={handlePlayVideo}
+          style={{ position: 'relative', width: '100%', aspectRatio: '16/9', background: '#000000', borderRadius: '8px', overflow: 'hidden', marginBottom: '16px', cursor: 'pointer' }}
+        >
           <video 
             ref={videoRef} 
             autoPlay 
             playsInline 
             muted 
+            onPlay={() => setIsPlaying(true)}
+            onPause={() => setIsPlaying(false)}
             style={{ width: '100%', height: '100%', objectFit: 'cover' }}
           />
 
-          {isRecording && (
+          {!isPlaying && (
+            <div style={{ position: 'absolute', inset: 0, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', background: 'rgba(0,0,0,0.8)', color: '#ffffff', zIndex: 10 }}>
+              <span style={{ fontSize: '2.5rem', marginBottom: '12px' }}>📷</span>
+              <span style={{ fontFamily: 'var(--font-display)', fontWeight: 'bold', fontSize: '1rem', textTransform: 'uppercase', letterSpacing: '1px' }}>
+                Tap to Start Camera Feed
+              </span>
+            </div>
+          )}
+
+          {isRecording && isPlaying && (
             <div style={{ position: 'absolute', top: '12px', left: '12px', display: 'flex', alignItems: 'center', gap: '6px', background: 'rgba(0,0,0,0.6)', padding: '6px 12px', borderRadius: '20px' }}>
               <span style={{ width: '8px', height: '8px', borderRadius: '50%', backgroundColor: 'var(--danger-color)', animation: 'pulse 1.5s infinite' }} />
               <span style={{ fontSize: '0.75rem', fontWeight: 'bold', color: 'var(--danger-color)', textTransform: 'uppercase' }}>
