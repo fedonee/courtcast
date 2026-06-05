@@ -1,0 +1,19 @@
+# Node dependencies
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Production build outputs
+client/dist/
+dist/
+
+# Local configuration and temporary media files
+server/setup.json
+server/temp/
+server/output/
+.env
+
+# System files
+.DS_Store
+Thumbs.db

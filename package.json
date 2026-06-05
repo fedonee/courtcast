@@ -1,0 +1,19 @@
+{
+  "name": "courtcast-root",
+  "version": "1.0.0",
+  "description": "CourtCast - Basketball Live Broadcast System Root",
+  "private": true,
+  "scripts": {
+    "install-server": "npm install --prefix server",
+    "install-client": "npm install --prefix client",
+    "install-all": "npm run install-server && npm run install-client",
+    "build-client": "npm run build --prefix client",
+    "start": "npm start --prefix server",
+    "dev-server": "npm run dev --prefix server",
+    "dev-client": "npm run dev --prefix client",
+    "dev": "concurrently \"npm run dev-server\" \"npm run dev-client\""
+  },
+  "dependencies": {
+    "concurrently": "^8.2.2"
+  }
+}
