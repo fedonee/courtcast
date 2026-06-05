@@ -1,4 +1,128 @@
 import React, { useState, useEffect, useRef } from 'react';
+import Tesseract from 'tesseract.js';
+
+function parseScoreboardText(text) {
+  // Normalize whitespace and split by space
+  const tokens = text.replace(/[^0-9:]/g, ' ') // Replace non-numeric/non-colon characters with space
+    .trim()
+    .replace(/\s+/g, ' ')
+    .split(' ')
+    .filter(t => t.length > 0);
+
+  console.log('[OCR] Normalized tokens:', tokens);
+
+  const parsed = {};
+
+  // 1. Extract clock (contains a colon ':')
+  let clockToken = null;
+  let clockIdx = tokens.findIndex(t => t.includes(':'));
+
+  if (clockIdx === -1) {
+    // Look for a 3-4 digit number that could be a clock (e.g., "1234" -> "12:34")
+    clockIdx = tokens.findIndex(t => /^\d{3,4}$/.test(t));
+    if (clockIdx !== -1) {
+      const t = tokens[clockIdx];
+      const mid = t.length - 2;
+      clockToken = t.slice(0, mid) + ':' + t.slice(mid);
+    }
+  } else {
+    clockToken = tokens[clockIdx];
+  }
+
+  if (clockToken && /^\d{1,2}:\d{2}$/.test(clockToken)) {
+    parsed.clock = clockToken;
+  }
+
+  // 2. Extract all other clean numbers
+  const numberTokens = [];
+  tokens.forEach((t, idx) => {
+    if (idx === clockIdx) return; // Skip clock token
+    const val = parseInt(t.replace(/[^0-9]/g, ''), 10);
+    if (!isNaN(val)) {
+      numberTokens.push({ val, originalIdx: idx });
+    }
+  });
+
+  console.log('[OCR] Extracted numbers:', numberTokens.map(n => n.val));
+
+  // If no numbers extracted, return what we have (e.g. clock only)
+  if (numberTokens.length === 0) {
+    return parsed;
+  }
+
+  // Helper to assign scores and quarter based on count of numbers
+  if (numberTokens.length === 2) {
+    // Simple layout: just Home Score and Away Score
+    parsed.home_score = numberTokens[0].val;
+    parsed.away_score = numberTokens[1].val;
+  } 
+  else if (numberTokens.length === 3) {
+    // Layout with quarter: e.g., [Home, Quarter, Away] or [Home, Away, Quarter]
+    const possibleQuarterIdx = numberTokens.findIndex(n => n.val >= 1 && n.val <= 4);
+    if (possibleQuarterIdx !== -1 && numberTokens.filter(n => n.val > 4).length >= 2) {
+      parsed.quarter = numberTokens[possibleQuarterIdx].val;
+      const scores = numberTokens.filter((_, idx) => idx !== possibleQuarterIdx);
+      parsed.home_score = scores[0].val;
+      parsed.away_score = scores[1].val;
+    } else {
+      parsed.home_score = numberTokens[0].val;
+      parsed.away_score = numberTokens[1].val;
+      if (numberTokens[2].val >= 1 && numberTokens[2].val <= 4) {
+        parsed.quarter = numberTokens[2].val;
+      }
+    }
+  } 
+  else if (numberTokens.length >= 4) {
+    const sorted = [...numberTokens].sort((a, b) => a.originalIdx - b.originalIdx);
+
+    if (clockIdx !== -1) {
+      const beforeClock = sorted.filter(n => n.originalIdx < clockIdx);
+      const afterClock = sorted.filter(n => n.originalIdx > clockIdx);
+
+      if (beforeClock.length >= 1 && afterClock.length >= 2) {
+        parsed.home_score = beforeClock[beforeClock.length - 1].val;
+        if (afterClock[0].val >= 1 && afterClock[0].val <= 4) {
+          parsed.quarter = afterClock[0].val;
+          parsed.away_score = afterClock[1].val;
+          
+          const stats = afterClock.slice(2);
+          if (stats.length >= 1) parsed.fouls_home = stats[0].val;
+          if (stats.length >= 2) parsed.timeouts_home = stats[1].val;
+          if (stats.length >= 3) parsed.timeouts_away = stats[2].val;
+          if (stats.length >= 4) parsed.fouls_away = stats[3].val;
+        } else {
+          parsed.away_score = afterClock[0].val;
+          const stats = afterClock.slice(1);
+          if (stats.length >= 1) parsed.fouls_home = stats[0].val;
+          if (stats.length >= 2) parsed.fouls_away = stats[1].val;
+        }
+      }
+      else if (beforeClock.length === 0 && afterClock.length >= 2) {
+        parsed.home_score = afterClock[0].val;
+        parsed.away_score = afterClock[1].val;
+        
+        const stats = afterClock.slice(2);
+        if (stats.length >= 1 && stats[0].val >= 1 && stats[0].val <= 4) {
+          parsed.quarter = stats[0].val;
+          const remainingStats = stats.slice(1);
+          if (remainingStats.length >= 1) parsed.fouls_home = remainingStats[0].val;
+          if (remainingStats.length >= 2) parsed.fouls_away = remainingStats[1].val;
+        } else {
+          if (stats.length >= 1) parsed.fouls_home = stats[0].val;
+          if (stats.length >= 2) parsed.fouls_away = stats[1].val;
+        }
+      }
+    } else {
+      parsed.home_score = sorted[0].val;
+      parsed.away_score = sorted[1].val;
+      if (sorted[2].val >= 1 && sorted[2].val <= 4) {
+        parsed.quarter = sorted[2].val;
+      }
+    }
+  }
+
+  return parsed;
+}
 
 export default function PhoneAScreen({ socket }) {
   const [crop, setCrop] = useState(null);
@@ -22,6 +146,7 @@ export default function PhoneAScreen({ socket }) {
   const canvasRef = useRef(null);
   const streamRef = useRef(null);
   const intervalRef = useRef(null);
+  const isProcessingRef = useRef(false);
 
   // Initialize camera and socket connection
   useEffect(() => {
@@ -100,31 +225,14 @@ export default function PhoneAScreen({ socket }) {
     };
   }, [crop, isPlaying]); // Restart interval whenever the crop bounds or playing status changes
 
-  const postOCRFrame = async (jpegBlob) => {
-    setOcrStatus('Reading...');
-    try {
-      const res = await fetch('/ocr/frame', {
-        method: 'POST',
-        headers: { 'Content-Type': 'image/jpeg' },
-        body: jpegBlob
-      });
-      const data = await res.json();
-      if (data.success) {
-        setOcrStatus('Read Successful');
-      } else {
-        setOcrStatus('Read Empty/Failed');
-      }
-    } catch (err) {
-      console.error('[OCR] Post failed:', err);
-      setOcrStatus('Network Error');
-    }
-  };
-
-  const processFrame = () => {
+  const processFrame = async () => {
     const video = videoRef.current;
     const canvas = canvasRef.current;
     
     if (video && video.readyState === video.HAVE_ENOUGH_DATA && canvas && isPlaying) {
+      if (isProcessingRef.current) return;
+      isProcessingRef.current = true;
+
       const vw = video.videoWidth;
       const vh = video.videoHeight;
 
@@ -141,22 +249,45 @@ export default function PhoneAScreen({ socket }) {
         // Crop and draw
         ctx.drawImage(video, cx, cy, cw, ch, 0, 0, cw, ch);
 
-        // Convert canvas to jpeg blob and upload
-        canvas.toBlob((blob) => {
-          if (blob) {
-            postOCRFrame(blob);
+        setOcrStatus('Reading locally...');
+        try {
+          // Perform OCR locally in the browser
+          const { data: { text } } = await Tesseract.recognize(canvas, 'eng', {
+            parameters: {
+              tessedit_char_whitelist: '0123456789:',
+              tessedit_pageseg_mode: '11' // Sparse text
+            }
+          });
+          
+          console.log('[OCR] Raw text:', text);
+          const parsed = parseScoreboardText(text);
+          console.log('[OCR] Parsed values:', parsed);
+
+          if (Object.keys(parsed).length > 0) {
+            socket.emit('SCORE_UPDATE_REQUEST', parsed);
+            setOcrStatus('Read Successful');
+          } else {
+            setOcrStatus('Read Empty/No digits');
           }
-        }, 'image/jpeg', 0.85);
+        } catch (err) {
+          console.error('[OCR] Local recognition failed:', err);
+          setOcrStatus('OCR Error');
+        } finally {
+          isProcessingRef.current = false;
+        }
       } else {
-        // No crop config yet. Capture and downscale to send to setup screen via socket
-        canvas.width = 640;
-        canvas.height = 480;
+        // No crop config yet. Capture and downscale to send to setup screen via socket maintaining correct aspect ratio
+        const targetWidth = 640;
+        const targetHeight = Math.round((vh / vw) * targetWidth);
+        canvas.width = targetWidth;
+        canvas.height = targetHeight;
         const ctx = canvas.getContext('2d');
-        ctx.drawImage(video, 0, 0, vw, vh, 0, 0, 640, 480);
+        ctx.drawImage(video, 0, 0, vw, vh, 0, 0, targetWidth, targetHeight);
         
         const base64Frame = canvas.toDataURL('image/jpeg', 0.65);
         socket.emit('PHONE_A_PREVIEW', base64Frame);
         setOcrStatus('Streaming preview...');
+        isProcessingRef.current = false;
       }
     }
   };

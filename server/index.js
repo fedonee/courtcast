@@ -5,7 +5,6 @@ const path = require('path');
 const fs = require('fs');
 const cors = require('cors');
 
-const ocr = require('./ocr');
 const overlay = require('./overlay');
 
 const app = express();
@@ -142,40 +141,8 @@ app.get('/download/latest', (req, res) => {
   }
 });
 
-// POST /ocr/frame - Receives cropped JPEG frame from Phone A
-app.post('/ocr/frame', async (req, res) => {
-  if (!Buffer.isBuffer(req.body) || req.body.length === 0) {
-    return res.status(400).send('Invalid image buffer.');
-  }
-  
-  console.log(`[Server] Received OCR frame: ${req.body.length} bytes`);
-  
-  // Process OCR frame
-  const parsed = await ocr.processFrame(req.body);
-  
-  // Update score log if anything was read
-  if (Object.keys(parsed).length > 0) {
-    // Merge updates, fallback to last valid values on missing properties
-    currentScore = {
-      ...currentScore,
-      ...parsed,
-      timestamp_ms: Date.now()
-    };
-    
-    scoreLog.push(currentScore);
-    console.log('[Server] Score updated:', currentScore);
-    
-    // Broadcast updated score log entry to all clients
-    io.emit('SCORE_UPDATE', currentScore);
-    
-    // Update live overlay files
-    if (isStreaming) {
-      overlay.updateOverlayFiles(currentScore, setupConfig);
-    }
-  } else {
-    console.log('[Server] OCR reading failed or empty, maintaining last score values.');
-  }
-  
+// POST /ocr/frame - Dummy endpoint for backward compatibility with old client caches
+app.post('/ocr/frame', (req, res) => {
   res.json({ success: true, score: currentScore });
 });
 
@@ -205,6 +172,28 @@ io.on('connection', (socket) => {
   socket.on('PHONE_A_PREVIEW', (base64Frame) => {
     // Forward the preview frame to `/setup` client
     socket.broadcast.emit('PHONE_A_PREVIEW', base64Frame);
+  });
+
+  // Receive scoreboard OCR updates computed locally on Phone A
+  socket.on('SCORE_UPDATE_REQUEST', (parsed) => {
+    if (parsed && Object.keys(parsed).length > 0) {
+      currentScore = {
+        ...currentScore,
+        ...parsed,
+        timestamp_ms: Date.now()
+      };
+      
+      scoreLog.push(currentScore);
+      console.log('[Socket] Score updated via client OCR:', currentScore);
+      
+      // Broadcast updated score log entry to all clients
+      io.emit('SCORE_UPDATE', currentScore);
+      
+      // Update live overlay files
+      if (isStreaming) {
+        overlay.updateOverlayFiles(currentScore, setupConfig);
+      }
+    }
   });
   
   // Receive video chunks from Phone B
