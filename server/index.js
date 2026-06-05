@@ -34,6 +34,7 @@ let setupConfig = {
   away_team: 'Lakers',
   stream_key: '',
   stream_visibility: 'unlisted',
+  gemini_api_key: '',
   crop_home: null,
   crop_clock: null,
   crop_away: null

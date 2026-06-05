@@ -6,6 +6,7 @@ export default function SetupScreen({ socket }) {
   const [awayTeam, setAwayTeam] = useState('Lakers');
   const [streamKey, setStreamKey] = useState('');
   const [streamVisibility, setStreamVisibility] = useState('unlisted');
+  const [geminiApiKey, setGeminiApiKey] = useState('');
   
   // Live camera preview from Phone A
   const [previewFrame, setPreviewFrame] = useState(null);
@@ -35,6 +36,7 @@ export default function SetupScreen({ socket }) {
           setAwayTeam(data.away_team || 'Lakers');
           setStreamKey(data.stream_key || '');
           setStreamVisibility(data.stream_visibility || 'unlisted');
+          setGeminiApiKey(data.gemini_api_key || '');
           setCropHome(data.crop_home || null);
           setCropClock(data.crop_clock || null);
           setCropAway(data.crop_away || null);
@@ -103,6 +105,7 @@ export default function SetupScreen({ socket }) {
       away_team: awayTeam,
       stream_key: streamKey,
       stream_visibility: streamVisibility,
+      gemini_api_key: geminiApiKey,
       crop_home: cropHome,
       crop_clock: cropClock,
       crop_away: cropAway
@@ -179,6 +182,20 @@ export default function SetupScreen({ socket }) {
               onChange={e => setStreamKey(e.target.value)} 
               placeholder="Leave empty to record locally only"
             />
+          </div>
+
+          <div className="form-group">
+            <label className="form-label">Gemini API Key (Optional)</label>
+            <input 
+              type="password" 
+              className="form-input" 
+              value={geminiApiKey} 
+              onChange={e => setGeminiApiKey(e.target.value)} 
+              placeholder="AI Studio API Key for 100% accurate Cloud OCR"
+            />
+            <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', marginTop: '4px', display: 'block' }}>
+              Create a free key at <a href="https://aistudio.google.com/" target="_blank" rel="noopener noreferrer" style={{ color: 'var(--accent-color)', textDecoration: 'underline' }}>Google AI Studio</a>. If empty, local browser OCR is used.
+            </span>
           </div>
 
           <div className="form-group">
