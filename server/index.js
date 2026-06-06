@@ -100,7 +100,11 @@ if (fs.existsSync(clientBuildPath)) {
 
 // HTTP API Routes
 app.get('/api/setup', (req, res) => {
-  res.json(setupConfig);
+  const isGeminiEnabled = !!(process.env.GEMINI_API_KEY || setupConfig.gemini_api_key);
+  res.json({
+    ...setupConfig,
+    gemini_api_key: isGeminiEnabled ? 'configured' : ''
+  });
 });
 
 app.post('/api/setup', (req, res) => {
@@ -149,49 +153,74 @@ app.post('/ocr/frame', (req, res) => {
   res.json({ success: true, score: currentScore });
 });
 
-app.post('/api/ocr-gemini', async (req, res) => {
+app.post('/api/ocr-gemini', (req, res) => {
   const { image } = req.body;
   if (!image) {
     return res.status(400).json({ error: 'No image provided' });
   }
-  if (!setupConfig.gemini_api_key) {
+
+  const apiKey = process.env.GEMINI_API_KEY || setupConfig.gemini_api_key;
+  if (!apiKey) {
     return res.status(400).json({ error: 'Gemini API Key is not configured' });
   }
 
-  try {
-    const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${setupConfig.gemini_api_key}`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        contents: [
-          {
-            parts: [
-              { text: "Read this basketball scoreboard image. Identify the home team score, away team score, and the remaining game clock. Return ONLY a raw JSON object matching this schema, without any markdown blocks or formatting: {\"home_score\": integer or null, \"away_score\": integer or null, \"clock\": \"MM:SS\" or null}. If any field is illegible or not present, return null for that field." },
-              { inlineData: { mimeType: "image/jpeg", data: image } }
-            ]
-          }
+  const postData = JSON.stringify({
+    contents: [
+      {
+        parts: [
+          { text: "Read this basketball scoreboard image. Identify the home team score, away team score, and the remaining game clock. Return ONLY a raw JSON object matching this schema, without any markdown blocks or formatting: {\"home_score\": integer or null, \"away_score\": integer or null, \"clock\": \"MM:SS\" or null}. If any field is illegible or not present, return null for that field." },
+          { inlineData: { mimeType: "image/jpeg", data: image } }
         ]
-      })
+      }
+    ]
+  });
+
+  const https = require('https');
+  const options = {
+    hostname: 'generativelanguage.googleapis.com',
+    port: 443,
+    path: `/v1beta/models/gemini-1.5-flash:generateContent?key=${apiKey}`,
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Content-Length': Buffer.byteLength(postData)
+    }
+  };
+
+  const geminiReq = https.request(options, (geminiRes) => {
+    let data = '';
+    geminiRes.on('data', (chunk) => {
+      data += chunk;
     });
+    geminiRes.on('end', () => {
+      try {
+        if (geminiRes.statusCode >= 200 && geminiRes.statusCode < 300) {
+          const resJson = JSON.parse(data);
+          const textResponse = resJson.candidates?.[0]?.content?.parts?.[0]?.text;
+          if (!textResponse) {
+            return res.json({ success: true, result: {} });
+          }
+          const cleanJsonText = textResponse.replace(/```json/g, '').replace(/```/g, '').trim();
+          const parsed = JSON.parse(cleanJsonText);
+          res.json({ success: true, result: parsed });
+        } else {
+          console.error('[Gemini API Response Error]:', data);
+          res.status(geminiRes.statusCode).json({ error: `Gemini API returned status ${geminiRes.statusCode}` });
+        }
+      } catch (err) {
+        console.error('[Gemini Proxy Parse Error]:', err.message);
+        res.status(500).json({ error: err.message });
+      }
+    });
+  });
 
-    if (!response.ok) {
-      const errMsg = await response.text();
-      throw new Error(`Gemini API error ${response.status}: ${errMsg}`);
-    }
-
-    const resJson = await response.json();
-    const textResponse = resJson.candidates?.[0]?.content?.parts?.[0]?.text;
-    if (!textResponse) {
-      return res.json({ success: true, result: {} });
-    }
-
-    const cleanJsonText = textResponse.replace(/```json/g, '').replace(/```/g, '').trim();
-    const parsed = JSON.parse(cleanJsonText);
-    res.json({ success: true, result: parsed });
-  } catch (err) {
-    console.error('[Gemini Proxy Error]:', err.message);
+  geminiReq.on('error', (err) => {
+    console.error('[Gemini Request Error]:', err.message);
     res.status(500).json({ error: err.message });
-  }
+  });
+
+  geminiReq.write(postData);
+  geminiReq.end();
 });
 
 // Socket.io connection logic

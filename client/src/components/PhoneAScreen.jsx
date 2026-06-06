@@ -322,7 +322,12 @@ export default function PhoneAScreen({ socket }) {
               });
 
               if (!response.ok) {
-                throw new Error(`API returned status ${response.status}`);
+                let msg = `API status ${response.status}`;
+                try {
+                  const errJson = await response.json();
+                  if (errJson && errJson.error) msg = errJson.error;
+                } catch (e) {}
+                throw new Error(msg);
               }
 
               const resJson = await response.json();
@@ -346,7 +351,7 @@ export default function PhoneAScreen({ socket }) {
               }
             } catch (err) {
               console.error('[OCR] Gemini API failed:', err);
-              setOcrStatus('Cloud OCR Error');
+              setOcrStatus('Cloud OCR Error: ' + err.message);
             } finally {
               isProcessingRef.current = false;
             }
