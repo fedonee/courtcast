@@ -34,7 +34,6 @@ let setupConfig = {
   away_team: 'Lakers',
   stream_key: '',
   stream_visibility: 'unlisted',
-  gemini_api_key: '',
   crop_home: null,
   crop_clock: null,
   crop_away: null
@@ -100,11 +99,7 @@ if (fs.existsSync(clientBuildPath)) {
 
 // HTTP API Routes
 app.get('/api/setup', (req, res) => {
-  const isGeminiEnabled = !!(process.env.GEMINI_API_KEY || setupConfig.gemini_api_key);
-  res.json({
-    ...setupConfig,
-    gemini_api_key: isGeminiEnabled ? 'configured' : ''
-  });
+  res.json(setupConfig);
 });
 
 app.post('/api/setup', (req, res) => {
@@ -151,127 +146,6 @@ app.get('/download/latest', (req, res) => {
 // POST /ocr/frame - Dummy endpoint for backward compatibility with old client caches
 app.post('/ocr/frame', (req, res) => {
   res.json({ success: true, score: currentScore });
-});
-
-function makeGeminiRequest(image, apiKey, model) {
-  return new Promise((resolve, reject) => {
-    const postData = JSON.stringify({
-      contents: [
-        {
-          parts: [
-            { text: "Read this basketball scoreboard image. Identify the home team score, away team score, and the remaining game clock. Return ONLY a raw JSON object matching this schema, without any markdown blocks or formatting: {\"home_score\": integer or null, \"away_score\": integer or null, \"clock\": \"MM:SS\" or null}. If any field is illegible or not present, return null for that field." },
-            { inlineData: { mimeType: "image/jpeg", data: image } }
-          ]
-        }
-      ]
-    });
-
-    const https = require('https');
-    const options = {
-      hostname: 'generativelanguage.googleapis.com',
-      port: 443,
-      path: `/v1beta/models/${model}:generateContent?key=${apiKey}`,
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Content-Length': Buffer.byteLength(postData)
-      }
-    };
-
-    const geminiReq = https.request(options, (geminiRes) => {
-      let data = '';
-      geminiRes.on('data', (chunk) => {
-        data += chunk;
-      });
-      geminiRes.on('end', () => {
-        try {
-          if (geminiRes.statusCode >= 200 && geminiRes.statusCode < 300) {
-            const resJson = JSON.parse(data);
-            const textResponse = resJson.candidates?.[0]?.content?.parts?.[0]?.text;
-            if (!textResponse) {
-              resolve({});
-              return;
-            }
-            const cleanJsonText = textResponse.replace(/```json/g, '').replace(/```/g, '').trim();
-            const parsed = JSON.parse(cleanJsonText);
-            resolve(parsed);
-          } else {
-            let errorMsg = `Gemini API returned status ${geminiRes.statusCode}`;
-            try {
-              const errJson = JSON.parse(data);
-              if (errJson.error && errJson.error.message) {
-                errorMsg = errJson.error.message;
-              }
-            } catch (e) {}
-            reject(new Error(errorMsg));
-          }
-        } catch (err) {
-          reject(err);
-        }
-      });
-    });
-
-    geminiReq.on('error', (err) => {
-      reject(err);
-    });
-
-    geminiReq.write(postData);
-    geminiReq.end();
-  });
-}
-
-app.post('/api/ocr-gemini', async (req, res) => {
-  const { image } = req.body;
-  if (!image) {
-    return res.status(400).json({ error: 'No image provided' });
-  }
-
-  let apiKey = (process.env.GEMINI_API_KEY || setupConfig.gemini_api_key || '').trim();
-  if (apiKey.startsWith('"') && apiKey.endsWith('"')) {
-    apiKey = apiKey.slice(1, -1).trim();
-  }
-  if (apiKey.startsWith("'") && apiKey.endsWith("'")) {
-    apiKey = apiKey.slice(1, -1).trim();
-  }
-
-  if (!apiKey) {
-    return res.status(400).json({ error: 'Gemini API Key is not configured' });
-  }
-
-  const candidateModels = [
-    'gemini-1.5-flash',
-    'gemini-2.0-flash',
-    'gemini-1.5-flash-latest',
-    'gemini-2.5-flash',
-    'gemini-1.5-pro'
-  ];
-
-  let success = false;
-  let lastError = '';
-
-  for (const model of candidateModels) {
-    try {
-      console.log(`[Gemini Proxy] Trying model: ${model}`);
-      const result = await makeGeminiRequest(image, apiKey, model);
-      res.json({ success: true, result });
-      success = true;
-      break;
-    } catch (err) {
-      console.warn(`[Gemini Proxy] Model ${model} failed:`, err.message);
-      lastError = err.message;
-      // If error is related to model not found or not supported, try next model
-      if (err.message.includes('not found') || err.message.includes('404') || err.message.includes('not supported') || err.message.includes('does not exist')) {
-        continue;
-      } else {
-        // Authenticity/key errors: stop and fail immediately
-        break;
-      }
-    }
-  }
-
-  if (!success) {
-    res.status(500).json({ error: lastError });
-  }
 });
 
 // Socket.io connection logic

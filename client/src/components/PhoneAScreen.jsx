@@ -1,5 +1,4 @@
 import React, { useState, useEffect, useRef } from 'react';
-import Tesseract from 'tesseract.js';
 
 function parseScoreboardText(text) {
   // Normalize whitespace and split by space
@@ -132,31 +131,195 @@ function preprocessCanvas(canvas) {
 
   let min = 255;
   let max = 0;
-  const brightness = new Uint8Array(data.length / 4);
+  const intensity = new Uint8Array(data.length / 4);
 
   for (let i = 0; i < data.length; i += 4) {
     const r = data[i];
     const g = data[i+1];
     const b = data[i+2];
-    const gray = Math.round(0.299 * r + 0.587 * g + 0.114 * b);
-    brightness[i/4] = gray;
-    if (gray < min) min = gray;
-    if (gray > max) max = gray;
+    
+    // Scoreboards are red, orange, yellow, green. Max(r, g) highlights these colors
+    // and ignores blue-tinted reflections or white glare.
+    const val = Math.max(r, g);
+    intensity[i/4] = val;
+    if (val < min) min = val;
+    if (val > max) max = val;
   }
 
   // Find threshold (midpoint between min and max)
   const threshold = max - min > 35 ? min + (max - min) * 0.45 : 120;
 
   for (let i = 0; i < data.length; i += 4) {
-    const gray = brightness[i/4];
-    // Bright text becomes black, dark background becomes white
-    const val = gray > threshold ? 0 : 255;
-    data[i] = val;
-    data[i+1] = val;
-    data[i+2] = val;
+    const val = intensity[i/4];
+    // Bright text (val > threshold) becomes black (0), background becomes white (255)
+    const finalVal = val > threshold ? 0 : 255;
+    data[i] = finalVal;
+    data[i+1] = finalVal;
+    data[i+2] = finalVal;
   }
   
   ctx.putImageData(imgData, 0, 0);
+}
+
+const isPointActive = (data, imgW, imgH, px, py) => {
+  const cx = Math.max(0, Math.min(imgW - 1, Math.round(px)));
+  const cy = Math.max(0, Math.min(imgH - 1, Math.round(py)));
+  
+  let blackCount = 0;
+  let total = 0;
+  for (let dy = -1; dy <= 1; dy++) {
+    for (let dx = -1; dx <= 1; dx++) {
+      const nx = cx + dx;
+      const ny = cy + dy;
+      if (nx >= 0 && nx < imgW && ny >= 0 && ny < imgH) {
+        const idx = (ny * imgW + nx) * 4;
+        if (data[idx] === 0) {
+          blackCount++;
+        }
+        total++;
+      }
+    }
+  }
+  return (blackCount / total) > 0.4;
+};
+
+const classifyDigit = (segments, box) => {
+  const aspect = box.w / box.h;
+  if (aspect < 0.35) {
+    return '1';
+  }
+  
+  const [segA, segB, segC, segD, segE, segF, segG] = segments;
+  
+  const patterns = {
+    '0': [true, true, true, true, true, true, false],
+    '1': [false, true, true, false, false, false, false],
+    '2': [true, true, false, true, true, false, true],
+    '3': [true, true, true, true, false, false, true],
+    '4': [false, true, true, false, false, true, true],
+    '5': [true, false, true, true, false, true, true],
+    '6': [true, false, true, true, true, true, true],
+    '7': [true, true, true, false, false, false, false],
+    '8': [true, true, true, true, true, true, true],
+    '9': [true, true, true, true, false, true, true]
+  };
+  
+  let bestDigit = null;
+  let minDiff = 8;
+  for (const [digit, pat] of Object.entries(patterns)) {
+    let diff = 0;
+    for (let i = 0; i < 7; i++) {
+      if (segments[i] !== pat[i]) {
+        diff++;
+      }
+    }
+    if (diff < minDiff) {
+      minDiff = diff;
+      bestDigit = digit;
+    }
+  }
+  
+  if (minDiff >= 3) {
+    return null;
+  }
+  return bestDigit;
+};
+
+function recognizeSevenSegmentText(canvas, isClock) {
+  preprocessCanvas(canvas);
+  const ctx = canvas.getContext('2d');
+  if (!ctx) return '';
+  const imgData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+  const data = imgData.data;
+  const w = canvas.width;
+  const h = canvas.height;
+
+  // 1. Column density
+  const colDensity = new Array(w).fill(0);
+  for (let x = 0; x < w; x++) {
+    for (let y = 0; y < h; y++) {
+      const idx = (y * w + x) * 4;
+      if (data[idx] === 0) { // black pixel
+        colDensity[x]++;
+      }
+    }
+  }
+
+  // 2. Segment columns into digits
+  const digits = [];
+  let inDigit = false;
+  let startX = 0;
+  for (let x = 0; x < w; x++) {
+    const hasBlack = colDensity[x] >= 1;
+    if (hasBlack && !inDigit) {
+      inDigit = true;
+      startX = x;
+    } else if (!hasBlack && inDigit) {
+      inDigit = false;
+      if (x - startX >= 2) {
+        digits.push({ x: startX, width: x - startX });
+      }
+    }
+  }
+  if (inDigit) {
+    if (w - startX >= 2) {
+      digits.push({ x: startX, width: w - startX });
+    }
+  }
+
+  // 3. Classify each digit
+  const recognized = [];
+  for (const digit of digits) {
+    let minY = h;
+    let maxY = 0;
+    let hasAny = false;
+    for (let y = 0; y < h; y++) {
+      for (let x = digit.x; x < digit.x + digit.width; x++) {
+        const idx = (y * w + x) * 4;
+        if (data[idx] === 0) {
+          if (y < minY) minY = y;
+          if (y > maxY) maxY = y;
+          hasAny = true;
+        }
+      }
+    }
+
+    if (!hasAny) continue;
+
+    const box = {
+      x: digit.x,
+      y: minY,
+      w: digit.width,
+      h: Math.max(1, maxY - minY + 1)
+    };
+
+    if (box.h < 6) continue;
+
+    // Check for colon in Clock
+    if (isClock && (box.w / box.h < 0.22)) {
+      recognized.push(':');
+      continue;
+    }
+
+    if (box.w < 2) continue;
+
+    // Sample 7 segments
+    const segA = isPointActive(data, w, h, box.x + box.w * 0.5, box.y + box.h * 0.08);
+    const segB = isPointActive(data, w, h, box.x + box.w * 0.88, box.y + box.h * 0.28);
+    const segC = isPointActive(data, w, h, box.x + box.w * 0.88, box.y + box.h * 0.72);
+    const segD = isPointActive(data, w, h, box.x + box.w * 0.5, box.y + box.h * 0.92);
+    const segE = isPointActive(data, w, h, box.x + box.w * 0.12, box.y + box.h * 0.72);
+    const segF = isPointActive(data, w, h, box.x + box.w * 0.12, box.y + box.h * 0.28);
+    const segG = isPointActive(data, w, h, box.x + box.w * 0.5, box.y + box.h * 0.5);
+
+    const segments = [segA, segB, segC, segD, segE, segF, segG];
+    const digitChar = classifyDigit(segments, box);
+    if (digitChar !== null) {
+      recognized.push(digitChar);
+    }
+  }
+
+  return recognized.join('');
 }
 
 export default function PhoneAScreen({ socket }) {
@@ -252,24 +415,22 @@ export default function PhoneAScreen({ socket }) {
     };
   }, [socket]);
 
-  // Start the frame processing loop (runs every 2 seconds, or 4.5 seconds for Cloud Gemini OCR)
+  // Start the frame processing loop (runs every 2 seconds)
   useEffect(() => {
     if (intervalRef.current) {
       clearInterval(intervalRef.current);
     }
 
-    const intervalMs = setup.gemini_api_key ? 4500 : 2000;
-
     intervalRef.current = setInterval(() => {
       processFrame();
-    }, intervalMs);
+    }, 2000);
 
     return () => {
       if (intervalRef.current) {
         clearInterval(intervalRef.current);
       }
     };
-  }, [cropHome, cropClock, cropAway, isPlaying, setup.gemini_api_key]); // Restart interval whenever crop bounds, playing status, or Gemini key changes
+  }, [cropHome, cropClock, cropAway, isPlaying]); // Restart interval whenever crop bounds or playing status changes
 
   const processFrame = async () => {
     const video = videoRef.current;
@@ -283,176 +444,86 @@ export default function PhoneAScreen({ socket }) {
       const hasCrops = (cropHome && cropHome.width > 0) || (cropClock && cropClock.width > 0) || (cropAway && cropAway.width > 0);
 
       if (hasCrops) {
-        if (setup.gemini_api_key) {
-          setOcrStatus('Reading with Gemini...');
-          // Find encompassing bounding box of all active crops
-          let minX = 100, minY = 100, maxX = 0, maxY = 0;
-          let hasAny = false;
-          [cropHome, cropClock, cropAway].forEach(c => {
-            if (c && c.width > 0) {
-              minX = Math.min(minX, c.x);
-              minY = Math.min(minY, c.y);
-              maxX = Math.max(maxX, c.x + c.width);
-              maxY = Math.max(maxY, c.y + c.height);
-              hasAny = true;
-            }
-          });
+        setOcrStatus('Reading locally...');
+        const parsed = {};
 
-          let cx = 0, cy = 0, cw = vw, ch = vh;
-          if (hasAny) {
-            cx = (minX / 100) * vw;
-            cy = (minY / 100) * vh;
-            cw = ((maxX - minX) / 100) * vw;
-            ch = ((maxY - minY) / 100) * vh;
-          }
-
-          if (canvasRef.current) {
-            const canvas = canvasRef.current;
-            canvas.width = cw;
-            canvas.height = ch;
+        try {
+          // 1. Process Home Score
+          if (cropHome && cropHome.width > 0 && cropHome.height > 0 && canvasHomeRef.current) {
+            const canvas = canvasHomeRef.current;
+            const cx = (cropHome.x / 100) * vw;
+            const cy = (cropHome.y / 100) * vh;
+            const cw = (cropHome.width / 100) * vw;
+            const ch = (cropHome.height / 100) * vh;
+            const scale = 3;
+            canvas.width = cw * scale;
+            canvas.height = ch * scale;
             const ctx = canvas.getContext('2d');
-            ctx.drawImage(video, cx, cy, cw, ch, 0, 0, cw, ch);
+            ctx.imageSmoothingEnabled = true;
+            ctx.imageSmoothingQuality = 'high';
+            ctx.drawImage(video, cx, cy, cw, ch, 0, 0, cw * scale, ch * scale);
             
-            const base64Data = canvas.toDataURL('image/jpeg', 0.8).split(',')[1];
-            try {
-              const response = await fetch('/api/ocr-gemini', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ image: base64Data })
-              });
+            const cleanText = recognizeSevenSegmentText(canvas, false);
+            const val = parseInt(cleanText, 10);
+            if (!isNaN(val)) parsed.home_score = val;
+          }
 
-              if (!response.ok) {
-                let msg = `API status ${response.status}`;
-                try {
-                  const errJson = await response.json();
-                  if (errJson && errJson.error) msg = errJson.error;
-                } catch (e) {}
-                throw new Error(msg);
-              }
-
-              const resJson = await response.json();
-              if (resJson.success && resJson.result) {
-                const parsed = resJson.result;
-                
-                const update = {};
-                if (parsed.home_score !== null && !isNaN(parsed.home_score)) update.home_score = Number(parsed.home_score);
-                if (parsed.away_score !== null && !isNaN(parsed.away_score)) update.away_score = Number(parsed.away_score);
-                if (parsed.clock !== null && typeof parsed.clock === 'string') update.clock = parsed.clock.trim();
-
-                console.log('[OCR] Gemini AI Result:', update);
-                if (Object.keys(update).length > 0) {
-                  socket.emit('SCORE_UPDATE_REQUEST', update);
-                  setOcrStatus('Read Successful');
-                } else {
-                  setOcrStatus('Read Empty');
-                }
-              } else {
-                setOcrStatus('Read Empty');
-              }
-            } catch (err) {
-              console.error('[OCR] Gemini API failed:', err);
-              setOcrStatus('Cloud OCR Error: ' + err.message);
-            } finally {
-              isProcessingRef.current = false;
+          // 2. Process Clock
+          if (cropClock && cropClock.width > 0 && cropClock.height > 0 && canvasClockRef.current) {
+            const canvas = canvasClockRef.current;
+            const cx = (cropClock.x / 100) * vw;
+            const cy = (cropClock.y / 100) * vh;
+            const cw = (cropClock.width / 100) * vw;
+            const ch = (cropClock.height / 100) * vh;
+            const scale = 3;
+            canvas.width = cw * scale;
+            canvas.height = ch * scale;
+            const ctx = canvas.getContext('2d');
+            ctx.imageSmoothingEnabled = true;
+            ctx.imageSmoothingQuality = 'high';
+            ctx.drawImage(video, cx, cy, cw, ch, 0, 0, cw * scale, ch * scale);
+            
+            const cleanText = recognizeSevenSegmentText(canvas, true);
+            if (/^\d{1,2}:\d{2}$/.test(cleanText)) {
+              parsed.clock = cleanText;
+            } else if (/^\d{3,4}$/.test(cleanText)) {
+              const mid = cleanText.length - 2;
+              parsed.clock = cleanText.slice(0, mid) + ':' + cleanText.slice(mid);
             }
+          }
+
+          // 3. Process Away Score
+          if (cropAway && cropAway.width > 0 && cropAway.height > 0 && canvasAwayRef.current) {
+            const canvas = canvasAwayRef.current;
+            const cx = (cropAway.x / 100) * vw;
+            const cy = (cropAway.y / 100) * vh;
+            const cw = (cropAway.width / 100) * vw;
+            const ch = (cropAway.height / 100) * vh;
+            const scale = 3;
+            canvas.width = cw * scale;
+            canvas.height = ch * scale;
+            const ctx = canvas.getContext('2d');
+            ctx.imageSmoothingEnabled = true;
+            ctx.imageSmoothingQuality = 'high';
+            ctx.drawImage(video, cx, cy, cw, ch, 0, 0, cw * scale, ch * scale);
+            
+            const cleanText = recognizeSevenSegmentText(canvas, false);
+            const val = parseInt(cleanText, 10);
+            if (!isNaN(val)) parsed.away_score = val;
+          }
+
+          console.log('[OCR] Local 7-Segment OCR Result:', parsed);
+          if (Object.keys(parsed).length > 0) {
+            socket.emit('SCORE_UPDATE_REQUEST', parsed);
+            setOcrStatus('Read Successful');
           } else {
-            isProcessingRef.current = false;
+            setOcrStatus('Read Empty');
           }
-        } else {
-          // Fallback to Local Tesseract OCR
-          setOcrStatus('Reading locally...');
-          const parsed = {};
-
-          try {
-            // 1. Process Home Score
-            if (cropHome && cropHome.width > 0 && cropHome.height > 0 && canvasHomeRef.current) {
-              const canvas = canvasHomeRef.current;
-              const cx = (cropHome.x / 100) * vw;
-              const cy = (cropHome.y / 100) * vh;
-              const cw = (cropHome.width / 100) * vw;
-              const ch = (cropHome.height / 100) * vh;
-              canvas.width = cw;
-              canvas.height = ch;
-              const ctx = canvas.getContext('2d');
-              ctx.drawImage(video, cx, cy, cw, ch, 0, 0, cw, ch);
-              preprocessCanvas(canvas);
-              
-              const { data: { text } } = await Tesseract.recognize(canvas, 'eng', {
-                parameters: {
-                  tessedit_char_whitelist: '0123456789',
-                  tessedit_pageseg_mode: '7' // Single line
-                }
-              });
-              const cleanText = text.replace(/[^0-9]/g, '').trim();
-              const val = parseInt(cleanText, 10);
-              if (!isNaN(val)) parsed.home_score = val;
-            }
-
-            // 2. Process Clock
-            if (cropClock && cropClock.width > 0 && cropClock.height > 0 && canvasClockRef.current) {
-              const canvas = canvasClockRef.current;
-              const cx = (cropClock.x / 100) * vw;
-              const cy = (cropClock.y / 100) * vh;
-              const cw = (cropClock.width / 100) * vw;
-              const ch = (cropClock.height / 100) * vh;
-              canvas.width = cw;
-              canvas.height = ch;
-              const ctx = canvas.getContext('2d');
-              ctx.drawImage(video, cx, cy, cw, ch, 0, 0, cw, ch);
-              preprocessCanvas(canvas);
-              
-              const { data: { text } } = await Tesseract.recognize(canvas, 'eng', {
-                parameters: {
-                  tessedit_char_whitelist: '0123456789:',
-                  tessedit_pageseg_mode: '7' // Single line
-                }
-              });
-              const cleanText = text.replace(/[^0-9:]/g, '').trim();
-              if (/^\d{1,2}:\d{2}$/.test(cleanText)) {
-                parsed.clock = cleanText;
-              } else if (/^\d{3,4}$/.test(cleanText)) {
-                const mid = cleanText.length - 2;
-                parsed.clock = cleanText.slice(0, mid) + ':' + cleanText.slice(mid);
-              }
-            }
-
-            // 3. Process Away Score
-            if (cropAway && cropAway.width > 0 && cropAway.height > 0 && canvasAwayRef.current) {
-              const canvas = canvasAwayRef.current;
-              const cx = (cropAway.x / 100) * vw;
-              const cy = (cropAway.y / 100) * vh;
-              const cw = (cropAway.width / 100) * vw;
-              const ch = (cropAway.height / 100) * vh;
-              canvas.width = cw;
-              canvas.height = ch;
-              const ctx = canvas.getContext('2d');
-              ctx.drawImage(video, cx, cy, cw, ch, 0, 0, cw, ch);
-              preprocessCanvas(canvas);
-              
-              const { data: { text } } = await Tesseract.recognize(canvas, 'eng', {
-                parameters: {
-                  tessedit_char_whitelist: '0123456789',
-                  tessedit_pageseg_mode: '7' // Single line
-                }
-              });
-              const cleanText = text.replace(/[^0-9]/g, '').trim();
-              const val = parseInt(cleanText, 10);
-              if (!isNaN(val)) parsed.away_score = val;
-            }
-
-            console.log('[OCR] Multi-Zone OCR Result:', parsed);
-            if (Object.keys(parsed).length > 0) {
-              socket.emit('SCORE_UPDATE_REQUEST', parsed);
-              setOcrStatus('Read Successful');
-            } else {
-              setOcrStatus('Read Empty');
-            }
-          } catch (err) {
-            console.error('[OCR] Multi-Zone OCR Error:', err);
-            setOcrStatus('OCR Error');
-          } finally {
-            isProcessingRef.current = false;
-          }
+        } catch (err) {
+          console.error('[OCR] Local 7-Segment OCR Error:', err);
+          setOcrStatus('OCR Error');
+        } finally {
+          isProcessingRef.current = false;
         }
       } else {
         // No crop config yet. Capture and downscale to send to setup screen via socket maintaining correct aspect ratio
