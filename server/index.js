@@ -159,7 +159,14 @@ app.post('/api/ocr-gemini', (req, res) => {
     return res.status(400).json({ error: 'No image provided' });
   }
 
-  const apiKey = process.env.GEMINI_API_KEY || setupConfig.gemini_api_key;
+  let apiKey = (process.env.GEMINI_API_KEY || setupConfig.gemini_api_key || '').trim();
+  if (apiKey.startsWith('"') && apiKey.endsWith('"')) {
+    apiKey = apiKey.slice(1, -1).trim();
+  }
+  if (apiKey.startsWith("'") && apiKey.endsWith("'")) {
+    apiKey = apiKey.slice(1, -1).trim();
+  }
+
   if (!apiKey) {
     return res.status(400).json({ error: 'Gemini API Key is not configured' });
   }
@@ -205,7 +212,14 @@ app.post('/api/ocr-gemini', (req, res) => {
           res.json({ success: true, result: parsed });
         } else {
           console.error('[Gemini API Response Error]:', data);
-          res.status(geminiRes.statusCode).json({ error: `Gemini API returned status ${geminiRes.statusCode}` });
+          let errorMsg = `Gemini API returned status ${geminiRes.statusCode}`;
+          try {
+            const errJson = JSON.parse(data);
+            if (errJson.error && errJson.error.message) {
+              errorMsg = errJson.error.message;
+            }
+          } catch (e) {}
+          res.status(geminiRes.statusCode).json({ error: errorMsg });
         }
       } catch (err) {
         console.error('[Gemini Proxy Parse Error]:', err.message);
